@@ -1,0 +1,134 @@
+/*******************************************************************************************
+  SIMPL+ Module Information
+*******************************************************************************************/
+/*
+Dealer Name:	
+System Name:	Prowl
+Programmer:		
+Comments:		This module will send a push notification to an iPhone running the Prowl App.
+*/
+				
+/*******************************************************************************************
+  Compiler Directives
+*******************************************************************************************/
+#SYMBOL_NAME "Prowl_Client"
+#CATEGORY "32" // Miscellaneous
+#DEFAULT_VOLATILE 
+#ENABLE_STACK_CHECKING
+//#ENABLE_TRACE 
+#HELP_BEGIN
+#HELP_END
+/*******************************************************************************************
+  DIGITAL, ANALOG and SERIAL INPUTS and OUTPUTS
+*******************************************************************************************/
+STRING_INPUT MessageIn$[240];
+STRING_INPUT api_key$[240];
+STRING_INPUT app_name$[40];
+STRING_INPUT event_name$[40];
+ANALOG_INPUT priority;
+/*******************************************************************************************
+  GLOBAL VARIABLES
+*******************************************************************************************/
+TCP_CLIENT ProwlClient[16384];
+SIGNED_INTEGER giPriority;
+INTEGER connectRetry;  
+SIGNED_INTEGER status;
+STRING ServerName[60];
+STRING gsApiKey$[240];
+STRING gsMessageIn$[240]; 
+STRING gsMessageOut$[6000];
+STRING gsAppName$[40];
+STRING gsEventName$[40];
+/*******************************************************************************************
+  SOCKET CONNECTION FUNCTIONS
+*******************************************************************************************/
+FUNCTION TCP_Connect(){
+    status = SocketConnectClient (ProwlClient, ServerName, 80, 0);
+    IF (status < 0){
+		TRACE("Error connecting socket to address %s port %d",ServerName, 80);
+		TRACE("status: %d",status);
+		status = SocketDisconnectClient(ProwlClient);
+	    IF (status < 0){
+			TRACE("Error disconnecting socket from %s port %d",ServerName, 80);
+			TRACE("status: %d",status);
+		}
+		ConnectRetry = ConnectRetry + 1;
+		IF (ConnectRetry < 3){
+			TRACE("connectRetry=%u",ConnectRetry);
+			DELAY(100);
+			TCP_Connect();
+		}
+    }
+}
+FUNCTION TCP_Disconnect(){
+	status = ProwlClient.SocketStatus;
+	TRACE("TCP_Disconnect, status:%u",status);
+	IF (status = (2 || 1)){
+		TRACE("disconnecting...");
+		status = SocketDisconnectClient(ProwlClient);
+		IF (status < 0){
+			TRACE("Error disconnecting socket from %s port %d",ServerName, 80);
+			TRACE("status: %d",status);
+		}
+	}
+}
+FUNCTION TCP_Send(){
+//	SIGNED_INTEGER status;
+    status = ProwlClient.SocketStatus;
+	IF (status = 2){
+		ConnectRetry = 0;
+		SocketSend(ProwlClient,gsMessageOut$);
+		TRACE("sent: %s",gsMessageOut$);
+		DELAY (100);
+		gsMessageOut$ = "";
+		TCP_Disconnect();
+	}
+    ELSE {
+		TRACE("Not connected to socket, cannot send");
+		TRACE("status: %d",status);
+		TCP_Connect();
+    }
+}
+SOCKETCONNECT ProwlClient {
+	trace("socket connected");
+	ConnectRetry = 0;
+	CALL TCP_Send();
+}
+SOCKETDISCONNECT ProwlClient {
+	trace("Socket disconnected");
+}
+SOCKETSTATUS ProwlClient {
+    status = SocketGetStatus();
+}
+/*******************************************************************************************
+  ACTIONS
+*******************************************************************************************/
+CHANGE MessageIn$ {
+
+INTEGER iCharPos;
+
+	gsMessageIn$ = "";
+	iCharPos = 1;
+
+   	WHILE (iCharPos <= LEN(MessageIn$)) {								// While we haven't reached the end of the string
+		IF (MID(MessageIn$,iCharPos,1) = " ") 								// If the space character is found
+			gsMessageIn$ = gsMessageIn$ + "%20";							// Replace it with the %-encoded version of space [%20] 
+		ELSE																// Otherwise
+			gsMessageIn$ = gsMessageIn$ + MID(MessageIn$, iCharPos,1); 		// Put the character, untouched, back in the string
+			iCharPos = iCharPos + 1; 										// Increment the chracter position
+	}
+
+    giPriority = priority;
+    MAKESTRING (gsMessageOut$,"GET /publicapi/add?apikey=%s&priority=%d&application=%s&event=%s&description=%s HTTP/1.1\nHost: prowl.weks.net\n\n",gsApiKey$,giPriority,gsAppName$,gsEventName$,gsMessageIn$);
+	CALL TCP_Connect();
+}
+/*******************************************************************************************
+  STARTUP
+*******************************************************************************************/  
+Function Main(){
+	waitforinitializationcomplete();
+    ServerName = "prowl.weks.net";
+    gsApiKey$ = api_key$;
+    gsAppName$ = app_name$;
+	gsEventName$ = event_name$;
+}
